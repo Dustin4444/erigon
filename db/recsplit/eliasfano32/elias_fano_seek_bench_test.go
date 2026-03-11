@@ -17,6 +17,7 @@
 package eliasfano32
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"testing"
 )
@@ -119,11 +120,10 @@ func BenchmarkGet2(b *testing.B) {
 //   - real EFs are mostly tiny (83% have 1–3 word upperBits = 8–24 bytes)
 //   - real seeks are not uniform: 63% hit the fast-lane (upper(0) >= hi) on mainnet
 //
-// Use this benchmark only to measure raw binary-search cost on large EFs.
+// Use this benchmark only to measure raw search cost on EFs of various sizes.
 func BenchmarkSeek(b *testing.B) {
-	const count = 1_000_000
-
-	cases := []struct {
+	counts := []uint64{32, 1000, 100_000}
+	strides := []struct {
 		name   string
 		stride uint64
 	}{
@@ -132,24 +132,26 @@ func BenchmarkSeek(b *testing.B) {
 		{"stride1000_l9", 1000},
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		ef := buildEF(count, tc.stride)
-		maxOffset := (count - 1) * tc.stride
+	for _, count := range counts {
+		for _, tc := range strides {
+			ef := buildEF(count, tc.stride)
+			maxOffset := (count - 1) * tc.stride
 
-		targets := make([]uint64, count)
-		for i := range targets {
-			targets[i] = uint64(rand.Int64N(int64(maxOffset + 1)))
-		}
-
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			n := 0
-			for b.Loop() {
-				_, _ = ef.Seek(targets[n%count])
-				n++
+			const nTargets = 100_000
+			targets := make([]uint64, nTargets)
+			for i := range targets {
+				targets[i] = uint64(rand.Int64N(int64(maxOffset + 1)))
 			}
-		})
+
+			b.Run(fmt.Sprintf("n%d/%s", count, tc.name), func(b *testing.B) {
+				b.ReportAllocs()
+				n := 0
+				for b.Loop() {
+					_, _ = ef.Seek(targets[n%nTargets])
+					n++
+				}
+			})
+		}
 	}
 }
 
@@ -227,40 +229,4 @@ func BenchmarkDoubleGet3(b *testing.B) {
 		i++
 	}
 	_ = sink
-}
-
-// BenchmarkSeekPool models real mainnet seek patterns:
-//   - a pool of many small EFs placed at random offsets in a large global range
-//     (matching the real distribution: 83% of EFs have 1–3 word upperBits = 8–24 bytes)
-//   - seek targets uniform over the global range, so many seeks land before the first
-//     element of the chosen EF, exercising the fast-lane path (upper(0) >= hi)
-func BenchmarkSeekPool(b *testing.B) {
-	const (
-		numEFs    = 100_000
-		globalMax = 1 << 25 // 33M — representative global value range
-		stride    = 1000
-	)
-
-	rng := rand.New(rand.NewPCG(1, 2))
-
-	count := uint64(rng.IntN(7)) + 2 // 2–8 elements → 1–3 word upperBits
-	start := uint64(rng.Int64N(globalMax - int64(count)*stride + 1))
-	ef := NewEliasFano(count, start+(count-1)*stride)
-	for j := uint64(0); j < count; j++ {
-		ef.AddOffset(start + j*stride)
-	}
-	ef.Build()
-
-	targets := make([]uint64, numEFs)
-	for i := range targets {
-		targets[i] = uint64(rng.Int64N(globalMax + 1))
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	n := 0
-	for b.Loop() {
-		_, _ = ef.Seek(targets[n%numEFs])
-		n++
-	}
 }
