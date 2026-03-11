@@ -288,7 +288,9 @@ func (ef *EliasFano) searchForward(v uint64) (nextV uint64, nextI uint64, ok boo
 func (ef *EliasFano) searchUpperForward(hi uint64) uint64 {
 	lo, hiIdx := uint64(0), ef.count
 	if maxUpper := ef.u >> ef.l; maxUpper > 0 {
-		guess := min(hi*ef.count/maxUpper, ef.count)
+		guessHi, guessLo := bits.Mul64(hi, ef.count)
+		guess, _ := bits.Div64(guessHi, guessLo, maxUpper)
+		guess = min(guess, ef.count)
 		if guess == 0 {
 			guess = 1
 		}
@@ -300,6 +302,7 @@ func (ef *EliasFano) searchUpperForward(hi uint64) uint64 {
 					lo = guess - step
 					break
 				}
+				hiIdx = guess - step // tighten upper bound
 			}
 		} else {
 			// bracket forward: find hiIdx where upper(hiIdx) >= hi
@@ -313,6 +316,7 @@ func (ef *EliasFano) searchUpperForward(hi uint64) uint64 {
 					hiIdx = pos
 					break
 				}
+				lo = pos // tighten lower bound
 			}
 		}
 	}
@@ -331,7 +335,10 @@ func (ef *EliasFano) searchUpperReverse(hi uint64) uint64 {
 	lo, hiIdx := uint64(0), ef.count
 	if maxUpper := ef.u >> ef.l; maxUpper > 0 && hi < maxUpper {
 		// guess how far back from count the answer is
-		guess := min((maxUpper-hi)*ef.count/maxUpper, ef.count)
+		rem := maxUpper - hi
+		guessHi, guessLo := bits.Mul64(rem, ef.count)
+		guess, _ := bits.Div64(guessHi, guessLo, maxUpper)
+		guess = min(guess, ef.count)
 		if guess == 0 {
 			guess = 1
 		}
@@ -343,6 +350,7 @@ func (ef *EliasFano) searchUpperReverse(hi uint64) uint64 {
 					lo = guess - step
 					break
 				}
+				hiIdx = guess - step // tighten upper bound
 			}
 		} else {
 			// bracket forward (away from count)
@@ -356,6 +364,7 @@ func (ef *EliasFano) searchUpperReverse(hi uint64) uint64 {
 					hiIdx = pos
 					break
 				}
+				lo = pos // tighten lower bound
 			}
 		}
 	}
@@ -368,6 +377,7 @@ func (ef *EliasFano) searchUpperReverse(hi uint64) uint64 {
 	})
 	return lo + uint64(i)
 }
+
 func (ef *EliasFano) searchReverse(v uint64) (nextV uint64, nextI uint64, ok bool) {
 	if v == 0 {
 		return 0, 0, ef.Min() == 0 // .Max() touching `mmap`
@@ -932,8 +942,8 @@ func (ef *DoubleEliasFano) get2(i uint64) (cumKeys uint64, position uint64,
 	// cumKeys and position 32-bit offsets are always packed into the same uint64 word:
 	// cumKeys at bits [0:31], position at bits [32:63] of jump[jumpSuperQ+2+jumpInsideSuperQ].
 	jumpWord := ef.jump[jumpSuperQ+2+jumpInsideSuperQ]
-	jumpCumKeys := ef.jump[jumpSuperQ] + jumpWord&0xffffffff
-	jumpPosition := ef.jump[jumpSuperQ+1] + jumpWord>>32
+	jumpCumKeys := ef.jump[jumpSuperQ] + (jumpWord & 0xffffffff)
+	jumpPosition := ef.jump[jumpSuperQ+1] + (jumpWord >> 32)
 	//fmt.Printf("i = %d, jumpCumKeys = %d, jumpPosition = %d\n", i, jumpCumKeys, jumpPosition)
 
 	currWordCumKeys = jumpCumKeys / 64
