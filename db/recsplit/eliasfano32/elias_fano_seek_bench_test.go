@@ -76,6 +76,44 @@ func BenchmarkGet(b *testing.B) {
 	}
 }
 
+// BenchmarkGet2 measures Get2(i) which returns both element i and i+1.
+func BenchmarkGet2(b *testing.B) {
+	const count = 1_000_000
+
+	cases := []struct {
+		name   string
+		stride uint64
+	}{
+		{"stride1_l0", 1},
+		{"stride123_l6", 123},
+		{"stride1000_l9", 1000},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		ef := buildEF(count, tc.stride)
+		indices := rand.Perm(count - 1) // -1 because Get2 reads element i+1
+
+		b.Run(tc.name+"/sequential", func(b *testing.B) {
+			b.ReportAllocs()
+			n := uint64(0)
+			for b.Loop() {
+				_, _ = ef.Get2(n % (count - 1))
+				n++
+			}
+		})
+
+		b.Run(tc.name+"/random", func(b *testing.B) {
+			b.ReportAllocs()
+			n := 0
+			for b.Loop() {
+				_, _ = ef.Get2(uint64(indices[n%(count-1)]))
+				n++
+			}
+		})
+	}
+}
+
 // BenchmarkSeek measures Seek on a single large EF with uniform-random targets.
 // This does NOT reflect real-world usage (see BenchmarkSeekPool) because:
 //   - real EFs are mostly tiny (83% have 1–3 word upperBits = 8–24 bytes)
@@ -142,6 +180,53 @@ func BenchmarkAddOffset(b *testing.B) {
 			}
 		})
 	}
+}
+
+// buildDoubleEF constructs a DoubleEliasFano with n+1 buckets using random deltas.
+func buildDoubleEF(n int) *DoubleEliasFano {
+	cumKeys := make([]uint64, n+1)
+	position := make([]uint64, n+1)
+	for i := 1; i <= n; i++ {
+		cumKeys[i] = cumKeys[i-1] + uint64(rand.IntN(8)+1)
+		position[i] = position[i-1] + uint64(rand.IntN(16)+1)
+	}
+	var ef DoubleEliasFano
+	ef.Build(cumKeys, position)
+	return &ef
+}
+
+// BenchmarkDoubleGet2 measures DoubleEliasFano.Get2 with random access over 1M buckets.
+func BenchmarkDoubleGet2(b *testing.B) {
+	const n = 1 << 20
+	ef := buildDoubleEF(n)
+	indices := rand.Perm(n)
+	b.ResetTimer()
+	b.ReportAllocs()
+	var sink uint64
+	i := 0
+	for b.Loop() {
+		c, p := ef.Get2(uint64(indices[i%n]))
+		sink += c + p
+		i++
+	}
+	_ = sink
+}
+
+// BenchmarkDoubleGet3 measures DoubleEliasFano.Get3 with random access over 1M buckets.
+func BenchmarkDoubleGet3(b *testing.B) {
+	const n = 1 << 20
+	ef := buildDoubleEF(n)
+	indices := rand.Perm(n)
+	b.ResetTimer()
+	b.ReportAllocs()
+	var sink uint64
+	i := 0
+	for b.Loop() {
+		c, cn, p := ef.Get3(uint64(indices[i%n]))
+		sink += c + cn + p
+		i++
+	}
+	_ = sink
 }
 
 // BenchmarkSeekPool models real mainnet seek patterns:

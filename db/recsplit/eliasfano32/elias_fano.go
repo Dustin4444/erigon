@@ -270,11 +270,7 @@ func (ef *EliasFano) searchForward(v uint64) (nextV uint64, nextI uint64, ok boo
 	//   - 63% have upper(0) >= hi
 	found := ef.upper(0) >= hi // fast-lane
 	if !found {
-		// interpolation-sort showed good results, but keeping `sort.Sort` for simplicity now
-		i := sort.Search(int(ef.count), func(i int) bool {
-			return ef.upper(uint64(i+1)) >= hi
-		})
-		lo = uint64(i + 1)
+		lo = ef.searchUpperForward(hi)
 	}
 	for j := lo; j <= ef.count; j++ {
 		val, _, _, _, _ := ef.get(j)
@@ -283,6 +279,94 @@ func (ef *EliasFano) searchForward(v uint64) (nextV uint64, nextI uint64, ok boo
 		}
 	}
 	return 0, 0, false
+}
+
+// searchUpperForward finds the first index j in [1, count] where upper(j) >= hi.
+// Interpolation guess + exponential search to find a tight bracket, then binary search.
+// For uniform data the guess is nearly exact: 1–3 upper() calls.
+// For non-uniform data degrades gracefully to ~binary search.
+func (ef *EliasFano) searchUpperForward(hi uint64) uint64 {
+	lo, hiIdx := uint64(0), ef.count
+	if maxUpper := ef.u >> ef.l; maxUpper > 0 {
+		guess := min(hi*ef.count/maxUpper, ef.count)
+		if guess == 0 {
+			guess = 1
+		}
+		if ef.upper(guess) >= hi {
+			// bracket backward: find lo where upper(lo) < hi
+			hiIdx = guess
+			for step := uint64(1); step <= guess; step <<= 1 {
+				if ef.upper(guess-step) < hi {
+					lo = guess - step
+					break
+				}
+			}
+		} else {
+			// bracket forward: find hiIdx where upper(hiIdx) >= hi
+			lo = guess
+			for step := uint64(1); ; step <<= 1 {
+				pos := guess + step
+				if pos >= ef.count {
+					break
+				}
+				if ef.upper(pos) >= hi {
+					hiIdx = pos
+					break
+				}
+			}
+		}
+	}
+	n := int(hiIdx - lo)
+	if n <= 0 {
+		return lo + 1
+	}
+	i := sort.Search(n, func(i int) bool {
+		return ef.upper(lo+uint64(i)+1) >= hi
+	})
+	return lo + uint64(i) + 1
+}
+
+// searchUpperReverse finds the offset from count where upper(count-offset) <= hi.
+func (ef *EliasFano) searchUpperReverse(hi uint64) uint64 {
+	lo, hiIdx := uint64(0), ef.count
+	if maxUpper := ef.u >> ef.l; maxUpper > 0 && hi < maxUpper {
+		// guess how far back from count the answer is
+		guess := min((maxUpper-hi)*ef.count/maxUpper, ef.count)
+		if guess == 0 {
+			guess = 1
+		}
+		if ef.upper(ef.count-guess) <= hi {
+			// bracket backward (toward count): find lo where upper(count-lo) > hi
+			hiIdx = guess
+			for step := uint64(1); step <= guess; step <<= 1 {
+				if ef.upper(ef.count-guess+step) > hi {
+					lo = guess - step
+					break
+				}
+			}
+		} else {
+			// bracket forward (away from count)
+			lo = guess
+			for step := uint64(1); ; step <<= 1 {
+				pos := guess + step
+				if pos >= ef.count {
+					break
+				}
+				if ef.upper(ef.count-pos) <= hi {
+					hiIdx = pos
+					break
+				}
+			}
+		}
+	}
+	n := int(hiIdx - lo)
+	if n <= 0 {
+		return lo
+	}
+	i := sort.Search(n+1, func(i int) bool {
+		return ef.upper(ef.count-lo-uint64(i)) <= hi
+	})
+	return lo + uint64(i)
 }
 func (ef *EliasFano) searchReverse(v uint64) (nextV uint64, nextI uint64, ok bool) {
 	if v == 0 {
@@ -301,10 +385,7 @@ func (ef *EliasFano) searchReverse(v uint64) (nextV uint64, nextI uint64, ok boo
 
 	found := ef.upper(ef.count) <= hi // fast-lane. 60% hit-rate
 	if !found {
-		i := sort.Search(int(ef.count+1), func(i int) bool {
-			return ef.upper(ef.count-uint64(i)) <= hi
-		})
-		lo = uint64(i)
+		lo = ef.searchUpperReverse(hi)
 	}
 	for j := lo; j <= ef.count; j++ {
 		idx := ef.count - j
@@ -848,14 +929,11 @@ func (ef *DoubleEliasFano) get2(i uint64) (cumKeys uint64, position uint64,
 
 	jumpSuperQ := (i / superQ) * superQSize * 2
 	jumpInsideSuperQ := (i % superQ) / q
-	idx16 := 2*(jumpSuperQ+2) + 2*jumpInsideSuperQ
-	idx64, shift = idx16/2, 32*(idx16%2)
-	mask := uint64(0xffffffff) << shift
-	jumpCumKeys := ef.jump[jumpSuperQ] + (ef.jump[idx64]&mask)>>shift
-	idx16++
-	idx64, shift = idx16/2, 32*(idx16%2)
-	mask = uint64(0xffffffff) << shift
-	jumpPosition := ef.jump[jumpSuperQ+1] + (ef.jump[idx64]&mask)>>shift
+	// cumKeys and position 32-bit offsets are always packed into the same uint64 word:
+	// cumKeys at bits [0:31], position at bits [32:63] of jump[jumpSuperQ+2+jumpInsideSuperQ].
+	jumpWord := ef.jump[jumpSuperQ+2+jumpInsideSuperQ]
+	jumpCumKeys := ef.jump[jumpSuperQ] + jumpWord&0xffffffff
+	jumpPosition := ef.jump[jumpSuperQ+1] + jumpWord>>32
 	//fmt.Printf("i = %d, jumpCumKeys = %d, jumpPosition = %d\n", i, jumpCumKeys, jumpPosition)
 
 	currWordCumKeys = jumpCumKeys / 64
