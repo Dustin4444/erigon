@@ -23,7 +23,9 @@ package p2p
 
 import (
 	"net"
+	"time"
 
+	"github.com/erigontech/erigon/common/mclock"
 	"github.com/erigontech/erigon/diagnostics/metrics"
 )
 
@@ -38,6 +40,22 @@ var (
 	egressConnectMeter  = metrics.GetOrCreateCounter("p2p_dials")
 	egressTrafficMeter  = metrics.GetOrCreateCounter(egressMeterName)
 	activePeerGauge     = metrics.GetOrCreateGauge("p2p_peers")
+
+	// Disconnect reasons — label format: p2p_peer_disconnections_total{reason="requested"}
+	peerDisconnectionsTotal = map[string]metrics.Counter{
+		"requested":            metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="requested"}`),
+		"network_error":        metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="network_error"}`),
+		"protocol_error":       metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="protocol_error"}`),
+		"useless_peer":         metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="useless_peer"}`),
+		"too_many_peers":       metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="too_many_peers"}`),
+		"already_connected":    metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="already_connected"}`),
+		"incompatible_version": metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="incompatible_version"}`),
+		"quitting":             metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="quitting"}`),
+		"other":                metrics.GetOrCreateCounter(`p2p_peer_disconnections_total{reason="other"}`),
+	}
+
+	// Peer connection duration — how long peers stay connected before disconnecting
+	peerConnectionDuration = metrics.GetOrCreateSummary("p2p_peer_connection_duration_seconds")
 )
 
 // meteredConn is a wrapper around a net.Conn that meters both the
@@ -84,4 +102,40 @@ func (c *meteredConn) Close() error {
 		activePeerGauge.Dec()
 	}
 	return err
+}
+
+// RecordPeerDisconnect increments the disconnect counter for the given reason
+// and observes connection duration. created is the time of connection start.
+func RecordPeerDisconnect(reason DiscReason, created mclock.AbsTime) {
+	key := discReasonToKey(reason)
+	if c, ok := peerDisconnectionsTotal[key]; ok {
+		c.Inc()
+	} else {
+		peerDisconnectionsTotal["other"].Inc()
+	}
+	durSecs := float64(mclock.Now()-created) / float64(time.Second)
+	peerConnectionDuration.Observe(durSecs)
+}
+
+func discReasonToKey(r DiscReason) string {
+	switch r {
+	case DiscRequested:
+		return "requested"
+	case DiscNetworkError:
+		return "network_error"
+	case DiscProtocolError:
+		return "protocol_error"
+	case DiscUselessPeer:
+		return "useless_peer"
+	case DiscTooManyPeers:
+		return "too_many_peers"
+	case DiscAlreadyConnected:
+		return "already_connected"
+	case DiscIncompatibleVersion:
+		return "incompatible_version"
+	case DiscQuitting:
+		return "quitting"
+	default:
+		return "other"
+	}
 }

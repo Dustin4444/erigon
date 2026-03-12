@@ -764,6 +764,12 @@ running:
 			if pd.Inbound() {
 				inboundCount--
 			}
+			// Record disconnect metrics.
+			var discReason DiscReason = DiscNetworkError
+			if pd.err != nil {
+				discReason = pd.err.Reason
+			}
+			RecordPeerDisconnect(discReason, pd.created)
 		case <-logTimer.C:
 			vals := []any{"protocol", srv.Config.Protocols[0].Version, "peers", len(peers), "trusted", len(trusted), "inbound", inboundCount}
 			vals = append(vals, srv.listErrors()...)
