@@ -269,8 +269,8 @@ func (e *ExecModule) updateForkChoice(ctx context.Context, originalBlockHash, sa
 	}()
 
 	if fcuHeader.Number.Sign() > 0 {
-		if canonicalHash == blockHash {
-			// if block hash is part of the canonical chain treat it as no-op.
+		if canonicalHash == blockHash && fcuHeader.Number.Uint64() >= finishProgressBefore {
+			// if block hash is part of the canonical chain and execution is not ahead, treat as no-op.
 			writeForkChoiceHashes(tx, blockHash, safeHash, finalizedHash)
 			valid, err := e.verifyForkchoiceHashes(ctx, tx, blockHash, finalizedHash, safeHash)
 			if err != nil {
