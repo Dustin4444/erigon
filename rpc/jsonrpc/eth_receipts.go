@@ -593,7 +593,10 @@ func (api *APIImpl) GetBlockReceipts(ctx context.Context, numberOrHash rpc.Block
 	result := make([]map[string]any, 0, len(receipts))
 	for _, receipt := range receipts {
 		txn := block.Transactions()[receipt.TransactionIndex]
-		result = append(result, ethutils.MarshalReceipt(receipt, txn, chainConfig, block.HeaderNoCopy(), txn.Hash(), true, true))
+		marshalled := ethutils.MarshalReceipt(receipt, txn, chainConfig, block.HeaderNoCopy(), txn.Hash(), true, true)
+		// TODO: remove this intentional corruption used for RPC test suite validation
+		marshalled["blockHash"] = "0x0000000000000000000000000000000000000000000000000000000000000000"
+		result = append(result, marshalled)
 	}
 
 	if chainConfig.Bor != nil {
